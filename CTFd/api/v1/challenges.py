@@ -1,8 +1,10 @@
 from typing import List
 
 from flask import abort, render_template, request, url_for
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields as flask_fields
 from sqlalchemy.sql import and_
+from marshmallow import fields as marshmallow_fields
+from marshmallow_sqlalchemy import fields as sqlalchemy_fields
 
 from CTFd.api.v1.helpers.request import validate_args
 from CTFd.api.v1.helpers.schemas import sqlalchemy_to_pydantic
@@ -78,6 +80,25 @@ challenges_namespace.schema_model(
     "ChallengeListSuccessResponse", ChallengeListSuccessResponse.apidoc()
 )
 
+# https://stackoverflow.com/a/68349078
+TYPE_MAPPING = {
+    marshmallow_fields.String: flask_fields.String,
+    marshmallow_fields.Raw: flask_fields.Raw,
+    marshmallow_fields.Number: flask_fields.Integer,
+    marshmallow_fields.Integer: flask_fields.Integer,
+    marshmallow_fields.DateTime: flask_fields.DateTime,
+    sqlalchemy_fields.RelatedList: flask_fields.List(flask_fields.Raw)
+}
+
+def convert_schema_to_flask_model(schema):
+    schema_fields = getattr(schema, "_declared_fields")
+    print(schema_fields)
+    converted_schema = {}
+
+    for field in schema_fields:
+        converted_schema[field] = TYPE_MAPPING[type(schema_fields[field])]
+
+    return converted_schema
 
 @challenges_namespace.route("")
 class ChallengeList(Resource):
@@ -223,6 +244,7 @@ class ChallengeList(Resource):
     @admins_only
     @challenges_namespace.doc(
         description="Endpoint to create a Challenge object",
+        body=challenges_namespace.model('Challenge', convert_schema_to_flask_model(ChallengeSchema)),
         responses={
             200: ("Success", "ChallengeDetailedSuccessResponse"),
             400: (
@@ -253,6 +275,16 @@ class ChallengeList(Resource):
 @challenges_namespace.route("/types")
 class ChallengeTypes(Resource):
     @admins_only
+    @challenges_namespace.doc(
+        description="Endpoint to get Challenge types",
+        responses={
+            200: ("Success", "ChallengeDetailedSuccessResponse"),
+            400: (
+                "An error occured processing the provided or stored data",
+                "APISimpleErrorResponse",
+            ),
+        },
+    )
     def get(self):
         response = {}
 
@@ -444,6 +476,7 @@ class Challenge(Resource):
     @admins_only
     @challenges_namespace.doc(
         description="Endpoint to edit a specific Challenge object",
+        body=challenges_namespace.model('Challenge', convert_schema_to_flask_model(ChallengeSchema)),
         responses={
             200: ("Success", "ChallengeDetailedSuccessResponse"),
             400: (
@@ -492,6 +525,21 @@ class ChallengeAttempt(Resource):
     @check_challenge_visibility
     @during_ctf_time_only
     @require_verified_emails
+    @challenges_namespace.doc(
+        description="Endpoint to submit a challenge attempt",
+        params={'preview': {'type': 'bool'}},
+        body=challenges_namespace.model('Attempt', {
+            'challenge_id': flask_fields.Integer,
+            'submission': flask_fields.String
+        }),
+        responses={
+            200: ("Success", "ChallengeDetailedSuccessResponse"),
+            400: (
+                "An error occured processing the provided or stored data",
+                "APISimpleErrorResponse",
+            ),
+        },
+    )
     def post(self):
         if authed() is False:
             return {"success": True, "data": {"status": "authentication_required"}}, 403
